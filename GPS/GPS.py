@@ -1,0 +1,444 @@
+
+
+"""
+
+ Title: GPS Project
+ Author: Sailee Rumao
+ Date: 10/25/2018
+
+
+"""
+
+########################################################################################################################
+
+#Aproach:
+# 1. Imported all the text files , parsed and cleaned them for redundant data.
+#    Wrote a code that generated a kml file to visualize the paths on Google earth.
+
+# 2. Calculated the coordinates of Left Turns and added the place marks to the kml file.
+#
+# 3. Calculated the coordinates of stop lights and added the place marks to the kml file.
+
+# 4. Calculated the Cost function to find the best path. Updated the kml file to show the best path.
+
+
+########################################################################################################################
+
+
+##Import packages
+
+import math
+import numpy as np
+
+def data_intake(file):
+    """
+    This function is used to parse data in the text file and extract the required fields for further study.
+    :param file: Text data file
+    :return: 1. data : list containing latitude,Longitude,Speed,Tracking angle and Time(in hours)
+             2. Velocity : List of speed in Miles per hour (mph)
+
+    """
+
+    file = open(file,"r")
+    data = []
+    velocity = []
+    Tracking_angle = []
+    for line in file:
+        fields = line.split(",")
+
+        #Taking only the RMC fields
+        if fields[0] == '$GPRMC':
+            #Taking only the points that are active
+            if fields[2] == 'A':
+                lat = fields[3]
+                lat_direction = fields[4]
+                long = fields[5]
+                long_direction = fields [6]
+                Time_stamp = fields[1]
+                speed = float(fields [7])*1.1508  #converting speed from knots to mph
+                velocity = velocity + [speed]
+                tracking_angle = float(fields [8])
+                Tracking_angle = Tracking_angle + [tracking_angle]
+
+                #Changing Latitude-Longitutde Format
+                lat_min_to_deg =float(lat[2:]) /60
+                lat_deg = int(lat[0:2])
+                lat = lat_deg + lat_min_to_deg
+                #Parsing data
+                if lat_direction == 'N':
+                    lat = lat*1
+                else:
+                    lat = lat * -1
+
+                long_min_to_deg = float(long[3:])/60
+                long_deg = int(long[0:3])
+                long = long_deg + long_min_to_deg
+                if long_direction == 'E':
+                    long = long * 1
+                else:
+                    long = long * -1
+
+                #Changing Timestamp to Minutes
+                Time_hrs = []
+                time_hour = int(Time_stamp[0:2])
+                time_mins = int(Time_stamp[2:4])/60.0
+                time_secs = float(Time_stamp[4:])/3600
+                Time_hrs = time_hour + time_mins +time_secs
+
+                data = data + [[long,lat,speed,tracking_angle,Time_hrs]]
+
+    file.close()
+    return data,velocity,Tracking_angle
+
+
+def Data_filter(data):
+    """
+    This function removes the redundant data points(same latitude and longitude) from the raw file.
+
+    :param data: Parsed data obtained from the function data_intake
+    :return: List of Parsed data after removing the duplicates.
+
+    """
+
+    new_list = [[0,0,0,0,0]]
+    #each is lists as follows [longitude,latitude,speed,tracking angle,Time(hrs)]
+    for each in data:
+        if each[0] != new_list[-1][0] and each[1] != new_list[-1][1]:
+            new_list = new_list +[each]
+    return new_list[1:]
+    #returning the list from index 1 to remove the first list of zero's.
+
+def coordinates(filtered_data):
+    """
+    This function is defined to compute the required arguments for the kml file in string format.
+    :param filtered_data: filtered data from the function Data_filter
+    :return: The coordinate string.
+
+    """
+
+    Coordinate_string = ''
+
+    for lists in filtered_data:
+        Coordinate_string += str(lists[0]) + ',' +str(lists[1]) + ',' + '0.0\n'
+    return Coordinate_string
+
+
+def emit_header():
+    """
+    This function writes a code that creates the head of the kml file
+    :return:
+    """
+    header_string = ''
+    header_string += '<?xml version="1.0" encoding="UTF-8"?>\n' \
+                    '<kml xmlns="http://www.opengis.net/kml/2.2"> \n\t'
+
+    return header_string
+
+def emit_body(filtered_data_best_path,placemark_string,Left_Turn_String):
+    """
+    This function writes a code that creates the body of the kml file.
+    The body consists of the coordinates of the best path and place_mark for the stop signs.
+
+    :param filtered_data_best_path: Filtered data from the function Data_filter on the best path.
+    :param placemark_string:List of Strings of Place_marks for Stop signs generated below using the function
+     stops_Unique_coordinates for all the paths.
+    :return: The body string generated by this function.
+    """
+
+    body_string = ''
+    body_string += '<Document>'\
+                    '<Style id="yellowPoly">\n\t'\
+                    '<LineStyle>\n\t\t'\
+                    '<color>Af00ffff</color>\n\t\t'\
+                    '<width>6</width>\n\t'\
+                    '</LineStyle>\n\t'\
+                    '<PolyStyle>\n\t\t'\
+                    '<color>7f00ff00</color>\n\t'\
+                    '</PolyStyle>\n'\
+                    '</Style>\n'\
+                    '<Placemark><styleUrl>#yellowPoly</styleUrl>\n'\
+                    '<LineString>\n'\
+                    '<Description>Speed in MPH, not altitude.</Description>\n\t'\
+                    '<extrude>1</extrude>\n\t'\
+                    '<tesselate>1</tesselate>\n\t'\
+                    '<altitudeMode>absolute</altitudeMode>\n\t'\
+                    '<coordinates>'\
+                    + coordinates(filtered_data_best_path) + '\n\t' \
+                    '\t\t\t\t</coordinates>\n' \
+                    '\t\t\t</LineString>\n' \
+                    '\t\t</Placemark>\n' \
+                   + placemark_string \
+                   + Left_Turn_String \
+
+    return body_string
+
+
+def emit_trailer():
+    """
+    This function generates the trailer of the kml file.
+    :return: Returns the trailer string generated.
+
+    """
+
+    trailer_string = ''
+    trailer_string += '\n</Document>\n'\
+                      '</kml> \n\t'
+
+    return trailer_string
+
+
+### To detect Left turns.
+
+def Left_Turns(data_1, velocity_1, Tracking_angle_1):
+    """
+    This function is used to find the Left turn coordinates based on the Cross Products
+    if the cross product is greater than zero.
+
+    :param data_1: data file
+    :param velocity_1: speed(mph)
+    :param Tracking_angle_1: tracking angle in degrees
+    :return: List of Coordinates of Left turn.
+    """
+    time = 0
+    Left_turn_cords = []
+    for points in range(len(data_1)):
+        if Tracking_angle_1[points] > 80:
+            Time_value = (data_1[points + 1][4] - data_1[points][4]) * 60
+            time = time + Time_value
+            if velocity_1[points] < 15:
+                if time < 1:
+                    cross_product = data_1[points][0] * data_1[points + 1][1] - \
+                                    data_1[points][1] * data_1[points + 1][0]
+                    if cross_product > 0:
+                        Left_lat = data_1[points + 1][1]
+                        Left_long = data_1[points + 1][0]
+                        Left_turn_cords = Left_turn_cords + [[Left_long, Left_lat]]
+
+    Unique_Left_cords = [list(y) for y in set([tuple(x) for x in Left_turn_cords])]
+    return Unique_Left_cords
+
+
+def Left_Turn_Coordinates(Left_cords):
+    """
+    The Function writes a code for the Left turn yellow pins to generate the kml file.
+    :param Left_cords: The list of coordinates for left turn.
+    :return: The Left_turns string for yellow pins to be attached in the kml file.
+
+    """
+
+    Left_Turns_String = ''
+
+    for items in Left_cords:
+        Left_Turns_String += '<Placemark>\n\t' \
+                             '<description> Default Pin is Yellow </description>\n\t' \
+                             '<Point>\n\t\t' \
+                             '<coordinates>' \
+                             + str(items[0]) + ',' + str(items[1]) + ',' + '0.0\n\t' \
+                                                                           '</coordinates>\n' \
+                                                                           '</Point>\n' \
+                                                                           '</Placemark>'
+
+    return Left_Turns_String
+
+
+### Stop signs and Stop lights
+### 3. Stopping signs and Stop Lights.
+
+def Stop_sign_coordinats(data_1, velocity_1):
+    """
+    This function finds all the coordinates of the stop_lights and keeps only the unique coordinates.
+    :param data_1: The Parsed data file.
+    :param velocity_1: The speed in mph
+    :return: A list of Unique coordinates at the Stop Lights for the data file.
+    """
+    stop_cords = []
+    wait_time = 0
+    for data in range(len(data_1)-1):
+        if data_1[data][0]== data_1[data+1][0] and data_1[data][1] == data_1[data+1][1]:
+            Time_difference = (data_1[data + 1][4] - data_1[data][4]) * 3600
+            wait_time = wait_time + Time_difference
+            if velocity_1[data] <= 6:
+                if wait_time > 5:
+                    stop_long = data_1[data + 1][0]
+                    stop_lat = data_1[data + 1][1]
+                    stop_cords = stop_cords + [[stop_long, stop_lat]]
+        else:
+            wait_time = 0
+
+    #storing the unique coordinates for the stop lights.
+    Unique_Stop_cords = [list(y) for y in set([tuple(x) for x in stop_cords])]
+    return (Unique_Stop_cords)
+
+
+def stops_Unique_coordinates(stop_cords_1):
+    """
+
+    The Function writes a code for the stop light Placemarks to generate the kml file.
+    :param stop_cords_1: Unique Coordinates obtained from the function Stop_sign_coordinats
+    :return: The string of the Placemarks at Stop signs for the data file needed for the KML file.
+    """
+
+    Stop_Sign_Coordinate_string = ''
+    for items in stop_cords_1:
+
+        Stop_Sign_Coordinate_string += '<Placemark>\n\t' \
+                            '<description> Red PIN for A Stop </description>\n\t' \
+                            '<Style id = "normalPlacemark">\n\t\t'\
+                            '<IconStyle> \n\t\t\t' \
+                            '<color> ff0000ff </color> \n\t\t\t' \
+                            '<Icon>\n\t\t\t\t' \
+                            '<href> http: // maps.google.com /mapfiles/ kml / paddle / 1.png </href> \n\t\t\t'\
+                            '</Icon>\n\t\t' \
+                            '</IconStyle>\n\t' \
+                            '</Style>\n\t'\
+                            '<Point>\n\t\t'\
+                            '<coordinates> \n\t' \
+                            + str(items[0]) + ',' +str(items[1]) + ',' + '0.0\n'\
+                            '\t\t</coordinates> \n\t'\
+                            '</Point>\n\t'\
+                            '</Placemark>\n' \
+
+    return Stop_Sign_Coordinate_string
+
+#To find the Best Path
+### 4. Optimum Path.
+
+def Route_data(data_1,velocity_1):
+    """
+
+    This function calculates and stores the required arguments for the cost function in a list.
+    :param data_1: The data
+    :param velocity_1: List of speed in mph.
+    :return: List of normalized travel time(Objective function),maximum velocity (regularization function)
+     and the Total cost = Objective function + Maximum velocity.
+
+    """
+
+    route_data = []
+    travel_time_mins = ((data_1[len(data_1)-1][4]- data_1[0][4])*60)/30
+    max_velocity = 0.5*(max(velocity_1)/60)
+    cost = travel_time_mins + max_velocity
+
+    route_data = route_data + [travel_time_mins,max_velocity,cost]
+    return route_data
+
+
+def optimum_route(path_data):
+
+    """
+    This function compares all the paths based on the cost function to find the optimum route.
+    :param path_data: List of all paths data obtained from the function Route_data (line 339-360)
+    :return: The best path with its cost function(which is minimum of all).
+    """
+
+    Minimum_cost = math.inf
+    for path in path_data:
+        if path[2] < Minimum_cost:
+            Minimum_cost = path[2]
+            best_route = path[3]
+            best_path_velocity = path[1]
+
+        elif path[2] == Minimum_cost:
+            if path[1] < best_path_velocity:
+                Minimum_cost = path[2]
+                best_route = path[3]
+                best_path_velocity = path[1]
+
+    print('The best Path is :',best_route,'with cost function =',Minimum_cost)
+    return Minimum_cost, best_route
+
+
+
+def main():
+
+    ### 1. Parsing data
+    #Calling the data parsing funciton on all the text data files.
+    data_1,velocity_1,Tracking_angle_1 = data_intake('ZIAC_CO0_2018_10_12_1250.txt')
+    data_2,velocity_2,Tracking_angle_2 = data_intake('ZI8G_ERF_2018_08_16_1428.txt')
+    data_3,velocity_3,Tracking_angle_3 = data_intake('ZI8H_HJC_2018_08_17_1745.txt')
+    data_4,velocity_4,Tracking_angle_4 = data_intake('ZI8J_GKX_2018_08_19_1646.txt')
+    data_5,velocity_5,Tracking_angle_5 = data_intake('ZI8K_EV7_2018_08_20_1500.txt')
+    data_6,velocity_6,Tracking_angle_6 = data_intake('ZI8N_DG8_2018_08_23_1316.txt')
+    data_7,velocity_7,Tracking_angle_7 = data_intake('ZIAA_CTU_2018_10_10_1255.txt')
+    data_8,velocity_8,Tracking_angle_8 = data_intake('ZIAB_CIU_2018_10_11_1218.txt')
+
+    #Saving all the data files in alist
+    Routes = [data_1,data_2,data_3,data_4,data_5,data_6,data_7,data_8]
+
+    #Filtering the data for the best path used by the kml file to be visualised on the Google earth
+    filtered_data_best_path = Data_filter(data_7)
+
+
+
+    ### 2. To detect Left Turns.
+    Left_cords = Left_Turns(data_1,velocity_1,Tracking_angle_1)
+    Left_Turn_String = Left_Turn_Coordinates(Left_cords)
+
+    ### 3. To find the Stop Lights
+
+    stop_cords_1 = Stop_sign_coordinats(data_1,velocity_1)
+    stop_cords_2 = Stop_sign_coordinats(data_2,velocity_2)
+    stop_cords_3 = Stop_sign_coordinats(data_3,velocity_3)
+    stop_cords_4 = Stop_sign_coordinats(data_4,velocity_4)
+    stop_cords_5 = Stop_sign_coordinats(data_5,velocity_5)
+    stop_cords_6 = Stop_sign_coordinats(data_6,velocity_6)
+    stop_cords_7 = Stop_sign_coordinats(data_7,velocity_7)
+    print('The number of stop lights for the best route are:',len(stop_cords_7))
+    stop_cords_8 = Stop_sign_coordinats(data_8,velocity_8)
+
+
+    #
+    placemark_string_1 = stops_Unique_coordinates(stop_cords_1)
+    placemark_string_2 = stops_Unique_coordinates(stop_cords_2)
+    placemark_string_3 = stops_Unique_coordinates(stop_cords_3)
+    placemark_string_4 = stops_Unique_coordinates(stop_cords_4)
+    placemark_string_5 = stops_Unique_coordinates(stop_cords_5)
+    placemark_string_6 = stops_Unique_coordinates(stop_cords_6)
+    placemark_string_7 = stops_Unique_coordinates(stop_cords_7)
+    placemark_string_8 = stops_Unique_coordinates(stop_cords_8)
+
+    placemark_string = placemark_string_1+placemark_string_2+placemark_string_3+placemark_string_4+placemark_string_5+\
+                       placemark_string_6+placemark_string_7+placemark_string_8
+
+
+    ### 4. To find Optimum route
+
+    #Calling the function on all the data files to calculate the arguments for the cost function .
+    path_1 = Route_data(data_1, velocity_1)
+    path_1 += ['path_1']
+    path_2 = Route_data(data_2, velocity_2)
+    path_2 += ['path_2']
+    path_3 = Route_data(data_3, velocity_3)
+    path_3 += ['path_3']
+    path_4 = Route_data(data_4, velocity_4)
+    path_4 += ['path_4']
+    path_5 = Route_data(data_5, velocity_5)
+    path_5 += ['path_5']
+    path_6 = Route_data(data_6, velocity_6)
+    path_6 += ['path_6']
+    path_7 = Route_data(data_7, velocity_7)
+    print('The Cost function values(Objective function, Regularization function,Total cost) are:',path_7)
+    path_7 += ['path_7']
+    path_8 = Route_data(data_8, velocity_8)
+    path_8 += ['path_8']
+
+
+    #Storing the cost function arguments for all the paths in one list path data.
+    path_data = []
+    path_data = path_data + [path_1] + [path_2] + [path_3] + [path_4] + [path_5] + [path_6] + [path_7] + [path_8]
+
+    #Calling the function to find optimum route and storing the path in best route and cost as Minimum cost.
+    Minimum_cost,best_route = optimum_route(path_data)
+
+
+    #calling and appending all the functions that write a code to Generate Kml file
+    header_string = emit_header()
+    body_string = emit_body(filtered_data_best_path, placemark_string,Left_Turn_String)
+    trailer_string = emit_trailer()
+
+    with open('GPS_Project.kml', 'w') as f:
+        f.write(header_string + body_string + trailer_string)
+
+
+if __name__ == '__main__':
+    main()
